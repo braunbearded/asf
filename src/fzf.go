@@ -52,7 +52,7 @@ func FzfSelect(input io.Reader, args []string, numFields int, delimiter string) 
 	for _, line := range lines {
 		// Split by the specified delimiter
 		fields := strings.Split(line, delimiter)
-		
+
 		// Handle different numFields values
 		if numFields <= 0 {
 			// Return the entire line if numFields is 0 or negative
@@ -81,4 +81,3 @@ func FzfSelect(input io.Reader, args []string, numFields int, delimiter string) 
 	}
 	return results, nil
 }
-

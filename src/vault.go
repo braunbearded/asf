@@ -18,8 +18,8 @@ func FormatVaultsTable(vaults []*armkeyvault.Vault) string {
 			Header: "Name", Extractor: func(item interface{}) string { return *item.(*armkeyvault.Vault).Name },
 		},
 		{
-			Header: "Tags", 
-			Extractor: func(item interface{}) string { 
+			Header: "Tags",
+			Extractor: func(item interface{}) string {
 				tags := item.(*armkeyvault.Vault).Tags
 				return tagsToJson(tags)
 			},

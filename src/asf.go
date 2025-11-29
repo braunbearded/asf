@@ -1,8 +1,10 @@
+// Package asf handels the interaction with azure and fzf
 package asf
 
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os/exec"
@@ -11,7 +13,6 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/keyvault/armkeyvault"
 	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azsecrets"
-	"encoding/json"
 )
 
 func getDefaultSubscriptionID() (string, error) {
@@ -41,7 +42,6 @@ func tagsToJson(tags map[string]*string) string {
 }
 
 func Run() {
-
 	// Use Azure CLI token / DefaultAzureCredential
 	cred, err := azidentity.NewDefaultAzureCredential(nil)
 	if err != nil {
@@ -67,7 +67,6 @@ func Run() {
 
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
-
 		if err != nil {
 			log.Fatalf("failed to get next page: %v", err)
 		}
@@ -154,7 +153,6 @@ func Run() {
 
 		if len(selectedSecrets) == 1 {
 			selectedKeyOperation, err := FzfSelect(strings.NewReader("remove\tremove\nshow-pw\tshow passwod\nupdate-meta\tupdate metadata\nupdate-pw\tupdate password\nnew-version\tadd new version"), selectedOperationArgs, 1, "\t")
-
 			if err != nil {
 				log.Fatalf("error happend: %w", err)
 			}
@@ -163,7 +161,6 @@ func Run() {
 
 		if len(selectedSecrets) > 1 {
 			selectedKeyOperation, err := FzfSelect(strings.NewReader("show-pw\tshow passwod\nupdate-meta\tupdate metadata"), selectedOperationArgs, 1, "\t")
-
 			if err != nil {
 				log.Fatalf("error happend: %w", err)
 			}
@@ -171,4 +168,3 @@ func Run() {
 		}
 	}
 }
-
