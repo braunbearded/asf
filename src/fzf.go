@@ -1,4 +1,4 @@
-package main
+package asf
 
 import (
 	"errors"

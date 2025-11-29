@@ -1,4 +1,4 @@
-package main
+package asf
 
 import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/arm"

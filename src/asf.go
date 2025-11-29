@@ -1,4 +1,4 @@
-package main
+package asf
 
 import (
 	"bytes"
@@ -40,7 +40,7 @@ func tagsToJson(tags map[string]*string) string {
 	return tagsJSON
 }
 
-func main() {
+func Run() {
 
 	// Use Azure CLI token / DefaultAzureCredential
 	cred, err := azidentity.NewDefaultAzureCredential(nil)
