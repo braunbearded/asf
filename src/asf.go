@@ -2,78 +2,33 @@
 package asf
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
-	"os/exec"
+	"os"
 	"strings"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
-	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/keyvault/armkeyvault"
 	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azsecrets"
 )
 
-func getDefaultSubscriptionID() (string, error) {
-	cmd := exec.Command("az", "account", "show", "--query", "id", "--output", "tsv")
-	var out, stderr bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("failed to run az account show: %v, stderr: %s", err, stderr.String())
-	}
-	subID := strings.TrimSpace(out.String())
-	if subID == "" {
-		return "", fmt.Errorf("got empty subscription id from azure cli")
-	}
-	return subID, nil
-}
-
-func tagsToJson(tags map[string]*string) string {
-	tagsJSON := "{}"
-	if tags != nil && len(tags) > 0 {
-		tagsBytes, err := json.Marshal(tags)
-		if err == nil {
-			tagsJSON = string(tagsBytes)
-		}
-	}
-	return tagsJSON
-}
-
 func Run() {
+	ctx := context.Background()
+
 	// Use Azure CLI token / DefaultAzureCredential
 	cred, err := azidentity.NewDefaultAzureCredential(nil)
 	if err != nil {
 		log.Fatalf("failed to get credential: %v", err)
 	}
 
-	subscriptionID, err := getDefaultSubscriptionID()
+	subscriptionID, err := GetDefaultSubscriptionID()
 	if err != nil {
 		log.Fatalf("failed to get subscription: %v", err)
 	}
 	fmt.Println("Using subscription:", subscriptionID)
 
-	client, err := armkeyvault.NewVaultsClient(subscriptionID, cred, nil)
-	if err != nil {
-		log.Fatalf("failed to create vault client: %v", err)
-	}
-
-	ctx := context.Background()
-
-	var vaults []*armkeyvault.Vault
-
-	pager := client.NewListBySubscriptionPager(nil)
-
-	for pager.More() {
-		page, err := pager.NextPage(ctx)
-		if err != nil {
-			log.Fatalf("failed to get next page: %v", err)
-		}
-
-		// https://pkg.go.dev/github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/keyvault/armkeyvault#Vault
-		vaults = append(vaults, page.Value...)
-	}
+	vaults := GetVaults(subscriptionID, cred, ctx)
 
 	vaultsTable := FormatVaultsTable(vaults)
 
@@ -86,16 +41,26 @@ func Run() {
 	}
 
 	selectedVaults, err := FzfSelect(strings.NewReader(vaultsTable), selectVaultArgs, 1, "\t")
+	if err != nil {
+		if errors.Is(err, ErrUserCancelled) || errors.Is(err, ErrNoSelection) {
+			os.Exit(0)
+		}
 
-	fmt.Println(selectedVaults)
+		// Any other error is real and should be reported
+		log.Fatalf("Error: %v", err)
+	}
 
 	selectedOperationArgs := []string{
 		"--delimiter=\t", // Tab delimiter (literal tab character in Go string)
 		"--with-nth=2..", // Show all fields
 	}
 	selectedOperation, err := FzfSelect(strings.NewReader("list\tlist\nadd\tadd"), selectedOperationArgs, 1, "\t")
-
-	fmt.Println(selectedOperation)
+	if err != nil {
+		if errors.Is(err, ErrUserCancelled) || errors.Is(err, ErrNoSelection) {
+			os.Exit(0)
+		}
+		log.Fatalf("Error: %v", err)
+	}
 
 	var versions []*azsecrets.SecretProperties
 
@@ -145,16 +110,19 @@ func Run() {
 		}
 		selectedSecrets, err := FzfSelect(strings.NewReader(secretsTable), selectSecretsArgs, 2, "\t")
 		if err != nil {
-			log.Fatalf("error happend: %w", err)
+			if errors.Is(err, ErrUserCancelled) || errors.Is(err, ErrNoSelection) {
+				os.Exit(0)
+			}
+			log.Fatalf("Error: %v", err)
 		}
-
-		fmt.Println(selectedSecrets)
-		fmt.Printf("Len: %s", len(selectedSecrets))
 
 		if len(selectedSecrets) == 1 {
 			selectedKeyOperation, err := FzfSelect(strings.NewReader("remove\tremove\nshow-pw\tshow passwod\nupdate-meta\tupdate metadata\nupdate-pw\tupdate password\nnew-version\tadd new version"), selectedOperationArgs, 1, "\t")
 			if err != nil {
-				log.Fatalf("error happend: %w", err)
+				if errors.Is(err, ErrUserCancelled) || errors.Is(err, ErrNoSelection) {
+					os.Exit(0)
+				}
+				log.Fatalf("Error: %v", err)
 			}
 			fmt.Println(selectedKeyOperation)
 		}
@@ -162,7 +130,10 @@ func Run() {
 		if len(selectedSecrets) > 1 {
 			selectedKeyOperation, err := FzfSelect(strings.NewReader("show-pw\tshow passwod\nupdate-meta\tupdate metadata"), selectedOperationArgs, 1, "\t")
 			if err != nil {
-				log.Fatalf("error happend: %w", err)
+				if errors.Is(err, ErrUserCancelled) || errors.Is(err, ErrNoSelection) {
+					os.Exit(0)
+				}
+				log.Fatalf("Error: %v", err)
 			}
 			fmt.Println(selectedKeyOperation)
 		}

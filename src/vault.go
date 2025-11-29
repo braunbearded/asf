@@ -1,9 +1,36 @@
 package asf
 
 import (
+	"context"
+	"encoding/json"
+	"log"
+
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/arm"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/keyvault/armkeyvault"
 )
+
+func GetVaults(subscriptionID string, credentials azcore.TokenCredential, context context.Context) []*armkeyvault.Vault {
+	client, err := armkeyvault.NewVaultsClient(subscriptionID, credentials, nil)
+	if err != nil {
+		log.Fatalf("failed to create vault client: %v", err)
+	}
+
+	var vaults []*armkeyvault.Vault
+
+	pager := client.NewListBySubscriptionPager(nil)
+
+	for pager.More() {
+		page, err := pager.NextPage(context)
+		if err != nil {
+			log.Fatalf("failed to get next page: %v", err)
+		}
+
+		// https://pkg.go.dev/github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/keyvault/armkeyvault#Vault
+		vaults = append(vaults, page.Value...)
+	}
+	return vaults
+}
 
 func FormatVaultsTable(vaults []*armkeyvault.Vault) string {
 	items := make([]interface{}, len(vaults))
@@ -21,7 +48,8 @@ func FormatVaultsTable(vaults []*armkeyvault.Vault) string {
 			Header: "Tags",
 			Extractor: func(item interface{}) string {
 				tags := item.(*armkeyvault.Vault).Tags
-				return tagsToJson(tags)
+				jsonString, _ := json.Marshal(tags)
+				return string(jsonString)
 			},
 		},
 		{
