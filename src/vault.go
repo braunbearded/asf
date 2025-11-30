@@ -10,6 +10,18 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/keyvault/armkeyvault"
 )
 
+func FilterVaults(vaults []*armkeyvault.Vault, vaultIDs []string) []*armkeyvault.Vault {
+	var result []*armkeyvault.Vault
+	for _, vault := range vaults {
+		for _, id := range vaultIDs {
+			if *vault.ID == id {
+				result = append(result, vault)
+			}
+		}
+	}
+	return result
+}
+
 func GetVaults(subscriptionID string, credentials azcore.TokenCredential, context context.Context) []*armkeyvault.Vault {
 	client, err := armkeyvault.NewVaultsClient(subscriptionID, credentials, nil)
 	if err != nil {
