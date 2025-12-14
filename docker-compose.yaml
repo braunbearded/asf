@@ -1,0 +1,14 @@
+version: "3.9"
+
+services:
+  az-go-env:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: asf
+    tty: true
+    stdin_open: true
+    user: "1000:1000"
+    volumes:
+      - ./:/workspace
+      - ./docker-files/az-cli:/home/developer/.azure
