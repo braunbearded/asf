@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/keyvault/armkeyvault"
 	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azsecrets"
 )
 
@@ -29,21 +30,37 @@ func FzfSelectOrExit(input io.Reader, fzfArgs []string, numFields int, delemiter
 func Run() {
 	ctx := context.Background()
 
-	// Use Azure CLI token / DefaultAzureCredential
-	cred, err := azidentity.NewDefaultAzureCredential(nil)
-	if err != nil {
-		log.Fatalf("failed to get credential: %v", err)
-	}
+	pr, pw := io.Pipe()
 
-	subscriptionID, err := GetDefaultSubscriptionID()
-	if err != nil {
-		log.Fatalf("failed to get subscription: %v", err)
-	}
-	fmt.Println("Using subscription:", subscriptionID)
+	errorChannel := make(chan error, 1)
+	credChannel := make(chan *azidentity.DefaultAzureCredential, 1)
+	vaultChannel := make(chan []*armkeyvault.Vault, 1)
+	subscriptionChannel := make(chan string, 1)
 
-	vaults := GetVaults(subscriptionID, cred, ctx)
+	go func() {
+		defer pw.Close()
+		// Use Azure CLI token / DefaultAzureCredential
+		cred, err := azidentity.NewDefaultAzureCredential(nil)
+		if err != nil {
+			errorChannel <- fmt.Errorf("failed to get credential: %v", err)
+			return
+		}
+		credChannel <- cred
 
-	vaultsTable := FormatVaultsTable(vaults)
+		subscriptionID, err := GetDefaultSubscriptionID()
+		if err != nil {
+			errorChannel <- fmt.Errorf("failed to get subscription: %v", err)
+			return
+		}
+		subscriptionChannel <- subscriptionID
+		// fmt.Println("Using subscription:", subscriptionID)
+
+		vaults := GetVaults(subscriptionID, cred, ctx)
+		vaultChannel <- vaults
+
+		vaultsTable := FormatVaultsTable(vaults)
+		fmt.Fprintf(pw, "%s\n", vaultsTable)
+	}()
 
 	// Build fzf command
 	selectVaultArgs := []string{
@@ -51,9 +68,24 @@ func Run() {
 		"--delimiter=\t",   // Tab delimiter (literal tab character in Go string)
 		"--with-nth=2..",   // Show all fields
 		"--multi",
+		"--prompt=Select vault> ",
+		"--header=TAB: Select\nENTER: Continue\n\n",
+		"--layout=reverse",
+		"--info=inline",
+		"--border",
+		// "--style=full", // todo required newer fzf version
+		// "--input-border", // todo required newer fzf version
+		// "--info=inline-right", // todo required newer fzf version
+		// "--header-border", // todo required newer fzf version
+		// "--gap" //todo check if usefull
 	}
 
-	selectedVaultIDs := FzfSelectOrExit(strings.NewReader(vaultsTable), selectVaultArgs, 1, "\t")
+	selectedVaultIDs := FzfSelectOrExit(pr, selectVaultArgs, 1, "\t")
+
+	cred := <-credChannel
+	// subscriptionID := <-subscriptionChannel
+	vaults := <-vaultChannel
+
 	selectedVaults := FilterVaults(vaults, selectedVaultIDs)
 
 	selectedOperationArgs := []string{
