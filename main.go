@@ -1,6 +1,6 @@
 package main
 
-import "github.com/braunbearded/asf/src"
+import asf "github.com/braunbearded/asf/src"
 
 func main() {
 	asf.Run()

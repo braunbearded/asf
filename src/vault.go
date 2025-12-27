@@ -44,6 +44,37 @@ func GetVaults(subscriptionID string, credentials azcore.TokenCredential, contex
 	return vaults
 }
 
+func GetVaults2(context context.Context, credentials azcore.TokenCredential, subscriptionID string) []Vault {
+	client, err := armkeyvault.NewVaultsClient(subscriptionID, credentials, nil)
+	if err != nil {
+		log.Fatalf("failed to create vault client: %v", err)
+	}
+
+	var vaults []Vault
+
+	pager := client.NewListBySubscriptionPager(nil)
+
+	for pager.More() {
+		page, err := pager.NextPage(context)
+		if err != nil {
+			log.Fatalf("failed to get next page: %v", err)
+		}
+
+		// https://pkg.go.dev/github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/keyvault/armkeyvault#Vault
+
+		for _, vault := range page.Value {
+			tags := make(map[string]string)
+			for k, v := range vault.Tags {
+				if v != nil {
+					tags[k] = *v
+				}
+			}
+			vaults = append(vaults, Vault{ID: *vault.ID, Name: *vault.Name, Tags: tags, Location: *vault.Location, Context: context, Credential: credentials, SubscriptionID: subscriptionID, TenantID: *vault.Properties.TenantID, VaultURI: *vault.Properties.VaultURI})
+		}
+	}
+	return vaults
+}
+
 func FormatVaultsTable(vaults []*armkeyvault.Vault) string {
 	items := make([]interface{}, len(vaults))
 	for i, v := range vaults {

@@ -3,148 +3,379 @@ package asf
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"log"
 	"os"
-	"strings"
+	"slices"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
-	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/keyvault/armkeyvault"
 	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azsecrets"
+	fzf "github.com/junegunn/fzf/src"
 )
 
-func FzfSelectOrExit(input io.Reader, fzfArgs []string, numFields int, delemiter string) []string {
-	result, err := FzfSelect(input, fzfArgs, numFields, delemiter)
-	if err != nil {
-		if errors.Is(err, ErrUserCancelled) || errors.Is(err, ErrNoSelection) {
-			os.Exit(0)
-		}
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-	return result
+type Operation int
+
+const (
+	ListVersions Operation = iota
+	GetPasswords
+	ListVersionAndGetPasswords
+	EditMetaData
+)
+
+type OperationData struct {
+	Name        string
+	Description string
+	Delemiter   string
 }
 
-func Run() {
-	ctx := context.Background()
+var allOperations = map[Operation]OperationData{
+	ListVersions:               {"list-versions", "List versions for selected items", ";"},
+	GetPasswords:               {"get-passwords", "Get passwords for selected items", ";"},
+	ListVersionAndGetPasswords: {"list-version-get-password", "List versions and get passwords for selected items", ";"},
+	EditMetaData:               {"edit-meta", "Edit meta data for selected items in $EDITOR", ";"},
+}
 
-	pr, pw := io.Pipe()
+func (operation Operation) Data() OperationData {
+	return allOperations[operation]
+}
 
-	errorChannel := make(chan error, 1)
-	credChannel := make(chan *azidentity.DefaultAzureCredential, 1)
-	vaultChannel := make(chan []*armkeyvault.Vault, 1)
-	subscriptionChannel := make(chan string, 1)
+func StringToOperation(name string) (Operation, bool) {
+	for item, data := range allOperations {
+		if data.Name == name {
+			return item, true
+		}
+	}
+	return 0, false
+}
+
+type Vault struct {
+	// Source struct https://pkg.go.dev/github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/keyvault/armkeyvault#Vault
+	ID             string
+	Name           string
+	Tags           map[string]string
+	Location       string
+	Context        context.Context
+	Credential     azcore.TokenCredential
+	SubscriptionID string
+	TenantID       string
+	VaultURI       string
+	// ResourceGroup string //TODO check if really needed
+}
+
+type Secret struct {
+	// Source structs: https://pkg.go.dev/github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azsecrets#Secret, https://pkg.go.dev/github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azsecrets#SecretProperties, https://pkg.go.dev/github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azsecrets#SecretAttributes
+	ContentType string
+	Name        string
+	Tags        map[string]string
+	Value       string
+	Vault       *Vault
+	Version     string
+	Managed     bool
+	Client      azsecrets.Client
+	// Attributes // TODO check if needed
+}
+
+func initVaults(context context.Context) <-chan []Vault {
+	channel := make(chan []Vault)
 
 	go func() {
-		defer pw.Close()
-		// Use Azure CLI token / DefaultAzureCredential
-		cred, err := azidentity.NewDefaultAzureCredential(nil)
+		defer close(channel)
+
+		credential, err := azidentity.NewDefaultAzureCredential(nil)
 		if err != nil {
-			errorChannel <- fmt.Errorf("failed to get credential: %v", err)
+			fmt.Errorf("failed to get credential: %v", err)
 			return
 		}
-		credChannel <- cred
 
 		subscriptionID, err := GetDefaultSubscriptionID()
 		if err != nil {
-			errorChannel <- fmt.Errorf("failed to get subscription: %v", err)
+			fmt.Errorf("failed to get subscription: %v", err)
 			return
 		}
-		subscriptionChannel <- subscriptionID
-		// fmt.Println("Using subscription:", subscriptionID)
 
-		vaults := GetVaults(subscriptionID, cred, ctx)
-		vaultChannel <- vaults
-
-		vaultsTable := FormatVaultsTable(vaults)
-		fmt.Fprintf(pw, "%s\n", vaultsTable)
+		vaults := GetVaults2(context, credential, subscriptionID)
+		channel <- vaults
 	}()
 
-	// Build fzf command
-	selectVaultArgs := []string{
-		"--header-lines=1", // Skip the header and separator lines
-		"--delimiter=\t",   // Tab delimiter (literal tab character in Go string)
-		"--with-nth=2..",   // Show all fields
-		"--multi",
-		"--prompt=Select vault> ",
-		"--header=TAB: Select\nENTER: Continue\n\n",
-		"--layout=reverse",
-		"--info=inline",
-		"--border",
-		// "--style=full", // todo required newer fzf version
-		// "--input-border", // todo required newer fzf version
-		// "--info=inline-right", // todo required newer fzf version
-		// "--header-border", // todo required newer fzf version
-		// "--gap" //todo check if usefull
+	return channel
+}
+
+func selectVaults(channel <-chan []Vault) []Vault {
+	var allVaults []Vault
+	var selectedNames []string
+
+	inputChan := make(chan string)
+	outputChan := make(chan string)
+
+	options, err := fzf.ParseOptions(true, []string{})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		os.Exit(fzf.ExitError)
 	}
+	options.Input = inputChan
+	options.Output = outputChan
 
-	selectedVaultIDs := FzfSelectOrExit(pr, selectVaultArgs, 1, "\t")
-
-	cred := <-credChannel
-	// subscriptionID := <-subscriptionChannel
-	vaults := <-vaultChannel
-
-	selectedVaults := FilterVaults(vaults, selectedVaultIDs)
-
-	selectedOperationArgs := []string{
-		"--delimiter=\t", // Tab delimiter (literal tab character in Go string)
-		"--with-nth=2..", // Show all fields
-	}
-	selectedOperation := FzfSelectOrExit(strings.NewReader("list\tlist\nadd\tadd"), selectedOperationArgs, 1, "\t")
-
-	var versions []*azsecrets.SecretProperties
-
-	if selectedOperation[0] == "list" {
-		for _, vault := range selectedVaults {
-			secretClient, err := azsecrets.NewClient(*vault.Properties.VaultURI, cred, nil)
-			if err != nil {
-				log.Fatalf("failed to create client for vault %s: %w", *vault.ID, err)
+	// Feed vault names to fzf as they arrive
+	go func() {
+		defer close(inputChan)
+		for vaults := range channel {
+			allVaults = append(allVaults, vaults...)
+			for _, vault := range vaults {
+				inputChan <- vault.Name // TODO improve formatting
 			}
+		}
+	}()
 
-			secretsPager := secretClient.NewListSecretPropertiesPager(nil)
-			for secretsPager.More() {
-				page, err := secretsPager.NextPage(ctx)
+	// Read selections in go routine because it will deadlock otherwise
+	go func() {
+		defer close(outputChan)
+		for selection := range outputChan {
+			selectedNames = append(selectedNames, selection)
+		}
+	}()
+
+	_, err = fzf.Run(options)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		os.Exit(fzf.ExitError)
+	}
+
+	// Return matching vaults
+	var selectedVaults []Vault
+	for _, vault := range allVaults {
+		if slices.Contains(selectedNames, vault.Name) {
+			selectedVaults = append(selectedVaults, vault)
+		}
+	}
+
+	return selectedVaults
+}
+
+func getSecrets(vaults []Vault) <-chan Secret {
+	secretStream := make(chan Secret)
+
+	go func() {
+		defer close(secretStream)
+		for _, vault := range vaults {
+			client, err := azsecrets.NewClient(vault.VaultURI, vault.Credential, nil)
+			if err != nil {
+				log.Fatalf("failed to create client for vault %s: %w", vault.ID, err)
+			}
+			pager := client.NewListSecretPropertiesPager(nil)
+			for pager.More() {
+				page, err := pager.NextPage(vault.Context)
 				if err != nil {
-					log.Fatalf("failed to list secrets in vault %s: %w", *vault.ID, err)
+					log.Fatalf("failed to list secrets in vault %s: %w", vault.ID, err)
 				}
-
-				for _, secretItem := range page.Value {
-					secretName := secretItem.ID.Name()
-
-					versionsPager := secretClient.NewListSecretPropertiesVersionsPager(secretName, nil)
-					for versionsPager.More() {
-						versionPage, err := versionsPager.NextPage(ctx)
-						if err != nil {
-							log.Fatalf("failed to list versions for secret %s: %w", secretName, err)
-						}
-						for _, versionItem := range versionPage.Value {
-							versions = append(versions, versionItem)
-						}
+				for _, secret := range page.Value {
+					version := secret.ID.Version()
+					if version == "" {
+						version = "latest"
+					}
+					secretStream <- Secret{
+						Name:    secret.ID.Name(),
+						Version: version,
+						Client:  *client,
 					}
 				}
 			}
 		}
-		secretsTable := FormatSecretsTable(versions)
+	}()
+	return secretStream
+}
 
-		selectSecretsArgs := []string{
-			"--header-lines=1", // Skip the header and separator lines
-			"--delimiter=\t",   // Tab delimiter (literal tab character in Go string)
-			"--with-nth=3..",   // Show all fields
-			"--multi",
-			"--preview=/usr/bin/az keyvault secret show --id '{1}'",
+func formatSecretForFzf(secret Secret) string {
+	password := secret.Value
+	if password == "" {
+		password = "******"
+	}
+	return fmt.Sprintf("%s | %s | %s", secret.Name, secret.Version, password)
+}
+
+func selectSecrets(channel <-chan Secret) []Secret {
+	var allSecrets []Secret
+	var selectedSecrets []Secret
+	var fzfSelection []string
+
+	inputChan := make(chan string)
+	outputChan := make(chan string)
+
+	options, err := fzf.ParseOptions(true, []string{"--multi"})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		os.Exit(fzf.ExitError)
+	}
+	options.Input = inputChan
+	options.Output = outputChan
+
+	go func() {
+		defer close(inputChan)
+		for secret := range channel {
+			allSecrets = append(allSecrets, secret)
+			inputChan <- formatSecretForFzf(secret) // TODO improve formatting
 		}
-		selectedSecrets := FzfSelectOrExit(strings.NewReader(secretsTable), selectSecretsArgs, 2, "\t")
+	}()
 
-		if len(selectedSecrets) == 1 {
-			selectedKeyOperation := FzfSelectOrExit(strings.NewReader("remove\tremove\nshow-pw\tshow passwod\nupdate-meta\tupdate metadata\nupdate-pw\tupdate password\nnew-version\tadd new version"), selectedOperationArgs, 1, "\t")
-			fmt.Println(selectedKeyOperation)
+	go func() {
+		defer close(outputChan)
+		for selection := range outputChan {
+			fzfSelection = append(fzfSelection, selection)
 		}
+	}()
 
-		if len(selectedSecrets) > 1 {
-			selectedKeyOperation := FzfSelectOrExit(strings.NewReader("show-pw\tshow passwod\nupdate-meta\tupdate metadata"), selectedOperationArgs, 1, "\t")
-			fmt.Println(selectedKeyOperation)
+	_, err = fzf.Run(options)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		os.Exit(fzf.ExitError)
+	}
+
+	for _, secret := range allSecrets {
+		if slices.Contains(fzfSelection, formatSecretForFzf(secret)) {
+			selectedSecrets = append(selectedSecrets, secret)
+		}
+	}
+
+	return selectedSecrets
+}
+
+func selectOperation(operationStack *[]Operation) Operation { // todo return slice and operation instead of using pointer
+	inputChan := make(chan string)
+	outputChan := make(chan string)
+	var selectedOperation *Operation
+
+	options, err := fzf.ParseOptions(true, []string{})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		os.Exit(fzf.ExitError)
+	}
+	options.Input = inputChan
+	options.Output = outputChan
+
+	go func() {
+		defer close(inputChan)
+		if !slices.Contains(*operationStack, ListVersions) {
+			inputChan <- ListVersions.Data().Name
+		}
+		if !slices.Contains(*operationStack, GetPasswords) || !slices.Contains(*operationStack, ListVersions) {
+			inputChan <- GetPasswords.Data().Name
+		}
+		inputChan <- ListVersionAndGetPasswords.Data().Name
+	}()
+
+	go func() {
+		defer close(outputChan)
+		for selection := range outputChan {
+			operation, err := StringToOperation(selection)
+			if !err {
+				os.Exit(fzf.ExitError)
+			}
+			selectedOperation = &operation
+		}
+	}()
+
+	_, err = fzf.Run(options)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		os.Exit(fzf.ExitError)
+	}
+
+	if selectedOperation == nil {
+		fmt.Println("Some weird happen in selectOperation")
+		os.Exit(fzf.ExitError)
+	}
+	*operationStack = append(*operationStack, *selectedOperation)
+	return *selectedOperation
+}
+
+func getVersions(secrets []Secret) <-chan Secret {
+	secretStream := make(chan Secret)
+
+	go func() {
+		defer close(secretStream)
+		for _, secret := range secrets {
+			secretStream <- secret
+
+			secretClient := secret.Client
+			versionsPager := secretClient.NewListSecretPropertiesVersionsPager(secret.Name, nil)
+
+			for versionsPager.More() {
+				versionPage, err := versionsPager.NextPage(context.Background()) // todo dirty fix for context -> null pointer needs to be fixed
+				if err != nil {
+					log.Fatalf("failed to list versions for secret %s: %w", secret.Name, err)
+				}
+				for _, secretVersion := range versionPage.Value {
+					secretStream <- Secret{Name: secretVersion.ID.Name(), Version: secretVersion.ID.Version(), Client: secretClient}
+				}
+			}
+		}
+	}()
+	return secretStream
+}
+
+func GetSecretPasswords(secrets []Secret) <-chan Secret {
+	secretStream := make(chan Secret)
+
+	go func() {
+		defer close(secretStream)
+		for _, secret := range secrets {
+			version := secret.Version
+			if version == "latest" {
+				version = ""
+			}
+			if secret.Value == "" { // todo check for nil
+				secretValue, err := secret.Client.GetSecret(context.Background(), secret.Name, version, nil)
+				if err != nil {
+					log.Fatalf("failed to get password for secret %s: %w", secret.Name, err)
+				}
+				secret.Value = *secretValue.Value
+			}
+			secretStream <- secret
+		}
+	}()
+	return secretStream
+}
+
+func Run() {
+	// operation on single item (shortcut?)
+	// see above +
+	// 5. update pw
+	// 6. remove
+
+	vaultStream := initVaults(context.Background())
+
+	selectedVaults := selectVaults(vaultStream)
+	if len(selectedVaults) == 0 {
+		fmt.Fprintln(os.Stderr, "No vault selected. Exiting...")
+		os.Exit(fzf.ExitError)
+	}
+	secretStream := getSecrets(selectedVaults)
+
+	var selectedSecrets []Secret
+	var operationStack []Operation
+
+	for {
+		selectedSecrets = selectSecrets(secretStream)
+		if len(selectedSecrets) == 0 {
+			fmt.Fprintln(os.Stderr, "No secrets selected. Exiting...")
+			os.Exit(fzf.ExitError)
+		}
+		selectedOperation := selectOperation(&operationStack)
+		switch selectedOperation {
+		case ListVersions:
+			secretStream = getVersions(selectedSecrets)
+		case GetPasswords:
+			secretStream = GetSecretPasswords(selectedSecrets)
+		case ListVersionAndGetPasswords:
+			_ = getVersions(selectedSecrets)
+			// todo collect secrets and save them in selectedSecrets
+			secretStream = GetSecretPasswords(selectedSecrets)
+			fmt.Println("ListVersionAndGetPasswords password selected")
+		case EditMetaData:
+			fmt.Println("EditMetaData selected")
+		// 	edit_meta(*selectedSecrets); confirm(); send_to_azure()
+		default:
+			fmt.Println("Something went wrong")
 		}
 	}
 }
