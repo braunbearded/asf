@@ -1,4 +1,4 @@
-package asf
+package internal
 
 import (
 	"bytes"
