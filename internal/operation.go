@@ -11,6 +11,7 @@ const (
 	GetPasswords
 	ListVersionAndGetPasswords
 	EditMetaData
+	DeleteSecret
 )
 
 type OperationData struct {
@@ -24,6 +25,7 @@ var allOperations = map[Operation]OperationData{
 	GetPasswords:               {"get-passwords", "Get passwords for selected items", ";"},
 	ListVersionAndGetPasswords: {"list-version-get-password", "List versions and get passwords for selected items", ";"},
 	EditMetaData:               {"edit-meta", "Edit meta data for selected items in $EDITOR", ";"},
+	DeleteSecret:               {"delete-secret", "Delete selected secret and all of its versions", ";"},
 }
 
 func (operation Operation) Data() OperationData {
