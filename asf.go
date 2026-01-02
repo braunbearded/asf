@@ -34,24 +34,28 @@ func Run() {
 			fmt.Fprintln(os.Stderr, "No secrets selected. Exiting...")
 			os.Exit(fzf.ExitError)
 		}
-		var selectedOperation internal.Operation
+		var selectedOperation *internal.Operation
 		selectedOperation, operationStack = internal.SelectOperation(operationStack)
+		if selectedOperation == nil {
+			fmt.Fprintln(os.Stderr, "No operation selected. Exiting...")
+			os.Exit(fzf.ExitError)
 
-		switch selectedOperation {
+		}
+
+		switch *selectedOperation {
 		case internal.ListVersions:
 			secretStream = internal.GetVersions(selectedSecrets)
 		case internal.GetPasswords:
 			secretStream = internal.GetSecretPasswords(selectedSecrets)
 		case internal.ListVersionAndGetPasswords:
-			_ = internal.GetVersions(selectedSecrets)
-			// todo collect secrets and save them in selectedSecrets
-			secretStream = internal.GetSecretPasswords(selectedSecrets)
-			fmt.Println("ListVersionAndGetPasswords password selected")
+			secretStream = internal.GetVersions(selectedSecrets)
+			secretStream = internal.GetSecretPasswordsStream(secretStream)
 		case internal.EditMetaData:
 			fmt.Println("EditMetaData selected")
 		// 	edit_meta(*selectedSecrets); confirm(); send_to_azure()
 		default:
-			fmt.Println("Something went wrong")
+			fmt.Fprintln(os.Stderr, "Something went wrong. Exiting....")
+			os.Exit(fzf.ExitError)
 		}
 	}
 }

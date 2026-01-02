@@ -15,7 +15,7 @@ func SelectVaults(channel <-chan []Vault) []Vault {
 	inputChan := make(chan string)
 	outputChan := make(chan string)
 
-	options, err := fzf.ParseOptions(true, []string{})
+	options, err := fzf.ParseOptions(true, []string{"--multi"})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(fzf.ExitError)
@@ -111,7 +111,7 @@ func SelectSecrets(channel <-chan Secret) []Secret {
 	return selectedSecrets
 }
 
-func SelectOperation(operationStack []Operation) (Operation, []Operation) { // todo return slice and operation instead of using pointer
+func SelectOperation(operationStack []Operation) (*Operation, []Operation) {
 	inputChan := make(chan string)
 	outputChan := make(chan string)
 	var selectedOperation *Operation
@@ -126,13 +126,15 @@ func SelectOperation(operationStack []Operation) (Operation, []Operation) { // t
 
 	go func() {
 		defer close(inputChan)
-		if !slices.Contains(operationStack, ListVersions) {
+		if !slices.Contains(operationStack, ListVersions) && !slices.Contains(operationStack, ListVersionAndGetPasswords) {
 			inputChan <- ListVersions.Data().Name
 		}
-		if !slices.Contains(operationStack, GetPasswords) || !slices.Contains(operationStack, ListVersions) {
+		if (!slices.Contains(operationStack, GetPasswords) || !slices.Contains(operationStack, ListVersions)) && !slices.Contains(operationStack, ListVersionAndGetPasswords) {
 			inputChan <- GetPasswords.Data().Name
+			inputChan <- ListVersionAndGetPasswords.Data().Name
 		}
-		inputChan <- ListVersionAndGetPasswords.Data().Name
+		inputChan <- EditMetaData.Data().Name
+		inputChan <- DeleteSecret.Data().Name
 	}()
 
 	go func() {
@@ -151,10 +153,8 @@ func SelectOperation(operationStack []Operation) (Operation, []Operation) { // t
 		os.Exit(fzf.ExitError)
 	}
 
-	if selectedOperation == nil {
-		fmt.Println("something weird happen in selectOperation")
-		os.Exit(fzf.ExitError)
+	if selectedOperation != nil {
+		operationStack = append(operationStack, *selectedOperation)
 	}
-	operationStack = append(operationStack, *selectedOperation)
-	return *selectedOperation, operationStack
+	return selectedOperation, operationStack
 }
