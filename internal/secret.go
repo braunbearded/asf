@@ -100,3 +100,26 @@ func GetSecretPasswords(secrets []Secret) <-chan Secret {
 	}()
 	return secretStream
 }
+
+func GetSecretPasswordsStream(secrets <-chan Secret) <-chan Secret {
+	secretStream := make(chan Secret)
+
+	go func() {
+		defer close(secretStream)
+		for secret := range secrets {
+			version := secret.Version
+			if version == "latest" {
+				version = ""
+			}
+			if secret.Value == "" { // todo check for nil
+				secretValue, err := secret.Client.GetSecret(secret.Vault.Context, secret.Name, version, nil)
+				if err != nil {
+					log.Fatalf("failed to get password for secret %s: %v", secret.Name, err)
+				}
+				secret.Value = *secretValue.Value
+			}
+			secretStream <- secret
+		}
+	}()
+	return secretStream
+}
