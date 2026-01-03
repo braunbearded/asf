@@ -2,7 +2,10 @@ package internal
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log"
+	"strings"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
@@ -52,6 +55,31 @@ type Vault struct {
 	TenantID       string
 	VaultURI       string
 	// ResourceGroup string //TODO check if really needed
+}
+
+func (vault Vault) FormatFZF(delemiter string, visualSeperator string) string {
+	tagsJSON, err := json.Marshal(vault.Tags)
+	tagsString := strings.ReplaceAll(string(tagsJSON), `"`, "")
+	if err != nil {
+		log.Fatalf("Error converting vault tags to string: %v", err)
+	}
+	return fmt.Sprintf("%s%s%s%s%s%s%s", vault.ID, delemiter, vault.Name, visualSeperator, tagsString, visualSeperator, vault.TenantID)
+}
+
+func FilterBySelection(vaults []Vault, selections []string, delemiter string) []Vault {
+	selectionMap := make(map[string]bool)
+	for _, selection := range selections {
+		id := strings.Split(selection, delemiter)[0]
+		selectionMap[id] = true
+	}
+
+	selectedVaults := make([]Vault, 0, len(selections))
+	for _, vault := range vaults {
+		if selectionMap[vault.ID] {
+			selectedVaults = append(selectedVaults, vault)
+		}
+	}
+	return selectedVaults
 }
 
 func InitVaults(context context.Context) <-chan []Vault {

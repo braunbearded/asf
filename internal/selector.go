@@ -8,6 +8,11 @@ import (
 	fzf "github.com/junegunn/fzf/src"
 )
 
+var (
+	FZFDELEMITER       = "|"
+	FZFVISUALSEPERATOR = " / "
+)
+
 func SelectVaults(channel <-chan []Vault) []Vault {
 	var allVaults []Vault
 	var selectedNames []string
@@ -15,7 +20,7 @@ func SelectVaults(channel <-chan []Vault) []Vault {
 	inputChan := make(chan string)
 	outputChan := make(chan string)
 
-	options, err := fzf.ParseOptions(true, []string{"--multi"})
+	options, err := fzf.ParseOptions(true, []string{"--multi", "--style", "full", "--delimiter", FZFDELEMITER, "--with-nth", "2.."})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(fzf.ExitError)
@@ -29,7 +34,7 @@ func SelectVaults(channel <-chan []Vault) []Vault {
 		for vaults := range channel {
 			allVaults = append(allVaults, vaults...)
 			for _, vault := range vaults {
-				inputChan <- vault.Name // TODO improve formatting
+				inputChan <- vault.FormatFZF(FZFDELEMITER, FZFVISUALSEPERATOR)
 			}
 		}
 	}()
@@ -47,15 +52,7 @@ func SelectVaults(channel <-chan []Vault) []Vault {
 		os.Exit(fzf.ExitError)
 	}
 
-	// Return matching vaults
-	var selectedVaults []Vault
-	for _, vault := range allVaults {
-		if slices.Contains(selectedNames, vault.Name) {
-			selectedVaults = append(selectedVaults, vault)
-		}
-	}
-
-	return selectedVaults
+	return FilterBySelection(allVaults, selectedNames, FZFDELEMITER)
 }
 
 func formatSecretForFzf(secret Secret) string {
