@@ -3,7 +3,6 @@ package internal
 import (
 	"fmt"
 	"os"
-	"slices"
 
 	fzf "github.com/junegunn/fzf/src"
 )
@@ -96,7 +95,7 @@ func SelectOperation(operationStack []Operation) (*Operation, []Operation) {
 	outputChan := make(chan string)
 	var selectedOperation *Operation
 
-	options, err := fzf.ParseOptions(true, []string{})
+	options, err := fzf.ParseOptions(true, []string{"--style", "full", "--delimiter", FZFDELEMITER, "--with-nth", "2.."})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(fzf.ExitError)
@@ -106,20 +105,16 @@ func SelectOperation(operationStack []Operation) (*Operation, []Operation) {
 
 	go func() {
 		defer close(inputChan)
-		if !slices.Contains(operationStack, ListVersions) && !slices.Contains(operationStack, ListVersionAndGetPasswords) {
-			inputChan <- ListVersions.Data().Name
-		}
-		if (!slices.Contains(operationStack, GetPasswords) || !slices.Contains(operationStack, ListVersions)) && !slices.Contains(operationStack, ListVersionAndGetPasswords) {
-			inputChan <- GetPasswords.Data().Name
-			inputChan <- ListVersionAndGetPasswords.Data().Name
-		}
-		inputChan <- EditMetaData.Data().Name
-		inputChan <- DeleteSecret.Data().Name
+		inputChan <- GetPasswords.Data().FormatFZF(FZFDELEMITER)
+		inputChan <- ListVersions.Data().FormatFZF(FZFDELEMITER)
+		inputChan <- ListVersionAndGetPasswords.Data().FormatFZF(FZFDELEMITER)
+		inputChan <- EditMetaData.Data().FormatFZF(FZFDELEMITER)
+		inputChan <- DeleteSecret.Data().FormatFZF(FZFDELEMITER)
 	}()
 
 	go func() {
 		for selection := range outputChan {
-			operation, errOp := StringToOperation(selection)
+			operation, errOp := GetOperationByName(selection, FZFDELEMITER)
 			if errOp != nil {
 				os.Exit(fzf.ExitError)
 			}
