@@ -66,7 +66,7 @@ func (vault Vault) FormatFZF(delemiter string, visualSeperator string) string {
 	return fmt.Sprintf("%s%s%s%s%s%s%s", vault.ID, delemiter, vault.Name, visualSeperator, tagsString, visualSeperator, vault.TenantID)
 }
 
-func FilterBySelection(vaults []Vault, selections []string, delemiter string) []Vault {
+func FilterVaultsBySelection(vaults []Vault, selections []string, delemiter string) []Vault {
 	selectionMap := make(map[string]bool)
 	for _, selection := range selections {
 		id := strings.Split(selection, delemiter)[0]

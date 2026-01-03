@@ -28,7 +28,6 @@ func SelectVaults(channel <-chan []Vault) []Vault {
 	options.Input = inputChan
 	options.Output = outputChan
 
-	// Feed vault names to fzf as they arrive
 	go func() {
 		defer close(inputChan)
 		for vaults := range channel {
@@ -39,7 +38,6 @@ func SelectVaults(channel <-chan []Vault) []Vault {
 		}
 	}()
 
-	// Read selections in go routine because it will deadlock otherwise
 	go func() {
 		for selection := range outputChan {
 			selectedNames = append(selectedNames, selection)
@@ -52,26 +50,17 @@ func SelectVaults(channel <-chan []Vault) []Vault {
 		os.Exit(fzf.ExitError)
 	}
 
-	return FilterBySelection(allVaults, selectedNames, FZFDELEMITER)
-}
-
-func formatSecretForFzf(secret Secret) string {
-	password := secret.Value
-	if password == "" {
-		password = "******"
-	}
-	return fmt.Sprintf("%s | %s | %s", secret.Name, secret.Version, password)
+	return FilterVaultsBySelection(allVaults, selectedNames, FZFDELEMITER)
 }
 
 func SelectSecrets(channel <-chan Secret) []Secret {
 	var allSecrets []Secret
-	var selectedSecrets []Secret
 	var fzfSelection []string
 
 	inputChan := make(chan string)
 	outputChan := make(chan string)
 
-	options, err := fzf.ParseOptions(true, []string{"--multi"})
+	options, err := fzf.ParseOptions(true, []string{"--multi", "--style", "full", "--delimiter", FZFDELEMITER, "--with-nth", "2.."})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(fzf.ExitError)
@@ -83,7 +72,7 @@ func SelectSecrets(channel <-chan Secret) []Secret {
 		defer close(inputChan)
 		for secret := range channel {
 			allSecrets = append(allSecrets, secret)
-			inputChan <- formatSecretForFzf(secret) // TODO improve formatting
+			inputChan <- secret.FormatFZF(FZFDELEMITER, FZFVISUALSEPERATOR)
 		}
 	}()
 
@@ -99,13 +88,7 @@ func SelectSecrets(channel <-chan Secret) []Secret {
 		os.Exit(fzf.ExitError)
 	}
 
-	for _, secret := range allSecrets {
-		if slices.Contains(fzfSelection, formatSecretForFzf(secret)) {
-			selectedSecrets = append(selectedSecrets, secret)
-		}
-	}
-
-	return selectedSecrets
+	return FilterSecretsBySelection(allSecrets, fzfSelection, FZFDELEMITER)
 }
 
 func SelectOperation(operationStack []Operation) (*Operation, []Operation) {

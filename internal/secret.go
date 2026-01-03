@@ -1,13 +1,18 @@
 package internal
 
 import (
+	"encoding/json"
+	"fmt"
 	"log"
+	"strings"
+	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azsecrets"
 )
 
 type Secret struct {
 	// Source structs: https://pkg.go.dev/github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azsecrets#Secret, https://pkg.go.dev/github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azsecrets#SecretProperties, https://pkg.go.dev/github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azsecrets#SecretAttributes
+	ID          string
 	ContentType string
 	Name        string
 	Tags        map[string]string
@@ -16,7 +21,8 @@ type Secret struct {
 	Version     string
 	Managed     bool
 	Client      azsecrets.Client
-	// Attributes // TODO check if needed
+	Enabled     bool
+	Created     time.Time
 }
 
 func GetSecrets(vaults []Vault) <-chan Secret {
@@ -40,11 +46,23 @@ func GetSecrets(vaults []Vault) <-chan Secret {
 					if version == "" {
 						version = "latest"
 					}
+					name := secret.ID.Name()
+
+					tags := make(map[string]string)
+					for k, v := range secret.Tags {
+						if v != nil {
+							tags[k] = *v
+						}
+					}
 					secretStream <- Secret{
-						Name:    secret.ID.Name(),
+						ID:      fmt.Sprintf("%s.%s.%s", vault.ID, name, version),
+						Name:    name,
 						Version: version,
 						Client:  *client,
 						Vault:   vault,
+						Tags:    tags,
+						Enabled: *secret.Attributes.Enabled,
+						Created: *secret.Attributes.Created,
 					}
 				}
 			}
@@ -70,7 +88,25 @@ func GetVersions(secrets []Secret) <-chan Secret {
 					log.Fatalf("failed to list versions for secret %s: %v", secret.Name, err)
 				}
 				for _, secretVersion := range versionPage.Value {
-					secretStream <- Secret{Name: secretVersion.ID.Name(), Version: secretVersion.ID.Version(), Client: secretClient, Vault: secret.Vault}
+					name := secretVersion.ID.Name()
+					version := secretVersion.ID.Version()
+
+					tags := make(map[string]string)
+					for k, v := range secretVersion.Tags {
+						if v != nil {
+							tags[k] = *v
+						}
+					}
+					secretStream <- Secret{
+						ID:      fmt.Sprintf("%s.%s.%s", secret.Vault.ID, name, version),
+						Name:    name,
+						Version: version,
+						Client:  secretClient,
+						Vault:   secret.Vault,
+						Tags:    tags,
+						Enabled: *secretVersion.Attributes.Enabled,
+						Created: *secretVersion.Attributes.Created,
+					}
 				}
 			}
 		}
@@ -122,4 +158,37 @@ func GetSecretPasswordsStream(secrets <-chan Secret) <-chan Secret {
 		}
 	}()
 	return secretStream
+}
+
+func (secret Secret) FormatFZF(delemiter string, visualSeperator string) string {
+	tagsJSON, err := json.Marshal(secret.Tags)
+	tagsString := strings.ReplaceAll(string(tagsJSON), `"`, "")
+	if err != nil {
+		log.Fatalf("Error converting secret tags to string: %v", err)
+	}
+
+	password := secret.Value
+	if password == "" {
+		password = "******"
+	}
+	created := fmt.Sprintf("{created:%s}", secret.Created.Format("2006-01-02 15:04"))
+	enabled := fmt.Sprintf("{enabled:%t}", secret.Enabled)
+
+	return fmt.Sprintf("%s%s%s%s%s%s%s%s%s%s%s%s%s", secret.ID, delemiter, secret.Name, visualSeperator, password, visualSeperator, secret.Version, visualSeperator, tagsString, visualSeperator, created, visualSeperator, enabled)
+}
+
+func FilterSecretsBySelection(secrets []Secret, selections []string, delemiter string) []Secret {
+	selectionMap := make(map[string]bool)
+	for _, selection := range selections {
+		id := strings.Split(selection, delemiter)[0]
+		selectionMap[id] = true
+	}
+
+	selectedSecrets := make([]Secret, 0, len(selections))
+	for _, secret := range secrets {
+		if selectionMap[secret.ID] {
+			selectedSecrets = append(selectedSecrets, secret)
+		}
+	}
+	return selectedSecrets
 }
