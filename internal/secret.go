@@ -77,7 +77,9 @@ func GetVersions(secrets []Secret) <-chan Secret {
 	go func() {
 		defer close(secretStream)
 		for _, secret := range secrets {
-			secretStream <- secret
+			if secret.Version == "latest" {
+				secretStream <- secret
+			}
 
 			secretClient := secret.Client
 			versionsPager := secretClient.NewListSecretPropertiesVersionsPager(secret.Name, nil)
@@ -174,7 +176,7 @@ func (secret Secret) FormatFZF(delemiter string, visualSeperator string) string 
 	created := fmt.Sprintf("{created:%s}", secret.Created.Format("2006-01-02 15:04"))
 	enabled := fmt.Sprintf("{enabled:%t}", secret.Enabled)
 
-	return fmt.Sprintf("%s%s%s%s%s%s%s%s%s%s%s%s%s", secret.ID, delemiter, secret.Name, visualSeperator, password, visualSeperator, secret.Version, visualSeperator, tagsString, visualSeperator, created, visualSeperator, enabled)
+	return fmt.Sprintf("%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s", secret.ID, delemiter, secret.Name, visualSeperator, password, visualSeperator, secret.Version, visualSeperator, secret.Vault.Name, visualSeperator, tagsString, visualSeperator, created, visualSeperator, enabled)
 }
 
 func FilterSecretsBySelection(secrets []Secret, selections []string, delemiter string) []Secret {

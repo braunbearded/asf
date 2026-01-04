@@ -28,7 +28,7 @@ jobs:
           GOOS: linux
           GOARCH: amd64
         run: |
-          go build -v -o asf .
+          go build -v -o asf ./cmd/asf
 
       - name: Upload binary to release
         uses: softprops/action-gh-release@v2
